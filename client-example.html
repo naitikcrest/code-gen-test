@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Client Example</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        input, button, select {
+            margin: 5px;
+            padding: 8px;
+        }
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            background-color: #f9f9f9;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 5px;
+            border-left: 3px solid #007bff;
+            background-color: white;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background-color: #f8d7da;
+        }
+        .success {
+            border-left-color: #28a745;
+            background-color: #d4edda;
+        }
+    </style>
+</head>
+<body>
+    <h1>Socket.IO Client Example</h1>
+    
+    <!-- Authentication Section -->
+    <div class="container">
+        <h3>Authentication</h3>
+        <input type="text" id="username" placeholder="Username" value="testuser">
+        <input type="password" id="password" placeholder="Password" value="password123">
+        <button onclick="login()">Login</button>
+        <button onclick="connect()">Connect to Socket</button>
+        <button onclick="disconnect()">Disconnect</button>
+        <div id="authStatus">Not authenticated</div>
+    </div>
+
+    <!-- Group Management -->
+    <div class="container">
+        <h3>Group Management</h3>
+        <input type="text" id="groupName" placeholder="Group name" value="general">
+        <button onclick="joinGroup()">Join Group</button>
+        <button onclick="getGroups()">Get Groups</button>
+        <button onclick="getOnlineUsers()">Get Online Users</button>
+    </div>
+
+    <!-- Messaging -->
+    <div class="container">
+        <h3>Send Message</h3>
+        <input type="text" id="messageContent" placeholder="Message content" style="width: 300px;">
+        <select id="messageType">
+            <option value="broadcast">Broadcast to All</option>
+            <option value="group">Send to Group</option>
+            <option value="direct">Direct Message</option>
+        </select>
+        <input type="text" id="targetGroup" placeholder="Group name (for group messages)" style="display:none;">
+        <input type="text" id="recipientId" placeholder="Recipient ID (for direct messages)" style="display:none;">
+        <button onclick="sendMessage()">Send Message</button>
+    </div>
+
+    <!-- Messages Display -->
+    <div class="container">
+        <h3>Messages</h3>
+        <div id="messages"></div>
+        <button onclick="clearMessages()">Clear Messages</button>
+    </div>
+
+    <script>
+        let socket = null;
+        let authToken = null;
+
+        // Update message type fields visibility
+        document.getElementById('messageType').addEventListener('change', function() {
+            const type = this.value;
+            document.getElementById('targetGroup').style.display = type === 'group' ? 'inline' : 'none';
+            document.getElementById('recipientId').style.display = type === 'direct' ? 'inline' : 'none';
+        });
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('http://localhost:3001/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    authToken = data.token;
+                    document.getElementById('authStatus').innerHTML = `✅ Authenticated as ${data.user.username}`;
+                    addMessage('Authentication successful!', 'success');
+                } else {
+                    document.getElementById('authStatus').innerHTML = '❌ Authentication failed';
+                    addMessage('Authentication failed: ' + data.error, 'error');
+                }
+            } catch (error) {
+                addMessage('Login error: ' + error.message, 'error');
+            }
+        }
+
+        function connect() {
+            if (!authToken) {
+                addMessage('Please login first!', 'error');
+                return;
+            }
+
+            socket = io('http://localhost:3001', {
+                auth: {
+                    token: authToken
+                }
+            });
+
+            socket.on('connect', () => {
+                addMessage('✅ Connected to server!', 'success');
+            });
+
+            socket.on('response', (data) => {
+                addMessage(`📨 ${data.type}: ${data.message}`, 'message');
+                if (data.content) {
+                    addMessage(`💬 Message from ${data.sender}: ${data.content}`, 'message');
+                }
+            });
+
+            socket.on('disconnect', (reason) => {
+                addMessage(`❌ Disconnected: ${reason}`, 'error');
+            });
+
+            socket.on('connect_error', (error) => {
+                addMessage(`❌ Connection error: ${error.message}`, 'error');
+            });
+        }
+
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                addMessage('Disconnected from server', 'message');
+            }
+        }
+
+        function joinGroup() {
+            if (!socket) {
+                addMessage('Please connect first!', 'error');
+                return;
+            }
+
+            const groupName = document.getElementById('groupName').value;
+            if (!groupName) {
+                addMessage('Please enter a group name!', 'error');
+                return;
+            }
+
+            socket.emit('join_group', { groupName });
+        }
+
+        function sendMessage() {
+            if (!socket) {
+                addMessage('Please connect first!', 'error');
+                return;
+            }
+
+            const content = document.getElementById('messageContent').value;
+            const messageType = document.getElementById('messageType').value;
+            
+            if (!content) {
+                addMessage('Please enter a message!', 'error');
+                return;
+            }
+
+            const messageData = { content };
+
+            if (messageType === 'group') {
+                const groupName = document.getElementById('targetGroup').value;
+                if (!groupName) {
+                    addMessage('Please enter a group name!', 'error');
+                    return;
+                }
+                messageData.groupName = groupName;
+            } else if (messageType === 'direct') {
+                const recipientId = document.getElementById('recipientId').value;
+                if (!recipientId) {
+                    addMessage('Please enter a recipient ID!', 'error');
+                    return;
+                }
+                messageData.recipientId = recipientId;
+            }
+
+            socket.emit('message', messageData);
+            document.getElementById('messageContent').value = '';
+        }
+
+        function getGroups() {
+            if (!socket) {
+                addMessage('Please connect first!', 'error');
+                return;
+            }
+            socket.emit('get_groups');
+        }
+
+        function getOnlineUsers() {
+            if (!socket) {
+                addMessage('Please connect first!', 'error');
+                return;
+            }
+            socket.emit('get_online_users');
+        }
+
+        function addMessage(message, type = 'message') {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = `<strong>${new Date().toLocaleTimeString()}</strong>: ${message}`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+
+        // Auto-connect on page load if token exists
+        window.addEventListener('load', () => {
+            addMessage('Welcome! Please login and connect to start using the socket server.', 'message');
+        });
+    </script>
+</body>
+</html>
+
